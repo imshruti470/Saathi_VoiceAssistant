@@ -1,3 +1,4 @@
+require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const mongoose = require("mongoose");
@@ -5,7 +6,6 @@ const natural = require("natural");
 const nodemailer = require("nodemailer");
 const { SummarizerManager } = require("node-summarizer");
 const { spawn } = require("child_process"); // ✅ Import child_process for Python execution
-require("dotenv").config();
 
 const app = express();
 const port = 5000;
@@ -153,8 +153,8 @@ app.post("/send-email", async (req, res) => {
         const transporter = nodemailer.createTransport({
             service: "gmail",
             auth: {
-                user: "imshruti470@gmail.com",
-                pass: "liqe dmpn lejy bquh",
+                user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS,
             }
         });
 

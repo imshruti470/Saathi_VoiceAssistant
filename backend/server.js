@@ -3,7 +3,7 @@ const express = require("express");
 const cors = require("cors");
 const mongoose = require("mongoose");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
-const { google } = require("googleapis");
+const ics = require("ics");
 const multer = require("multer");
 const PDFDocument = require("pdfkit");
 const fs = require("fs");
@@ -13,12 +13,6 @@ const path = require("path");
 const app = express();
 const port = 5000;
 const MONGO_URI = "mongodb://127.0.0.1:27017/transcriptions";
-
-const oauth2Client = new google.auth.OAuth2(
-    process.env.GOOGLE_CLIENT_ID,
-    process.env.GOOGLE_CLIENT_SECRET,
-    process.env.GOOGLE_REDIRECT_URI
-);
 
 const upload = multer({ dest: 'uploads/' });
 
@@ -321,66 +315,45 @@ app.post("/send-email", async (req, res) => {
 });
 
 
-app.get("/auth/google", (req, res) => {
-    const url = oauth2Client.generateAuthUrl({
-        access_type: 'offline',
-        scope: ['https://www.googleapis.com/auth/calendar.events']
-    });
-    res.json({ url });
-});
-
-app.get("/oauth2callback", async (req, res) => {
-    const { code } = req.query;
-    try {
-        const { tokens } = await oauth2Client.getToken(code);
-        oauth2Client.setCredentials(tokens);
-        res.redirect("http://localhost:3000/transcription?auth=success");
-    } catch (error) {
-        console.error("Error getting tokens:", error);
-        res.redirect("http://localhost:3000/transcription?auth=error");
-    }
-});
-
-app.post("/sync-calendar", async (req, res) => {
+app.get("/download-calendar", async (req, res) => {
     try {
         const latestTranscription = await Transcription.findOne().sort({ createdAt: -1 });
         if (!latestTranscription || !latestTranscription.analysis.actionItems) {
             return res.status(404).json({ error: "No action items to sync" });
         }
 
-        const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
-        let syncedCount = 0;
-
+        const events = [];
         for (const item of latestTranscription.analysis.actionItems) {
             if (typeof item === 'object' && item.task && item.deadline) {
-                const event = {
-                    summary: item.task,
+                const date = new Date(item.deadline);
+                if (isNaN(date.getTime())) continue; // Skip invalid dates
+                
+                events.push({
+                    title: item.task,
                     description: "Auto-generated from Smart Voice Assistant.",
-                    start: {
-                        dateTime: item.deadline,
-                        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-                    },
-                    end: {
-                        dateTime: new Date(new Date(item.deadline).getTime() + 60*60*1000).toISOString(),
-                        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-                    },
-                };
-                await calendar.events.insert({
-                    calendarId: 'primary',
-                    resource: event,
+                    start: [date.getFullYear(), date.getMonth() + 1, date.getDate(), date.getHours(), date.getMinutes()],
+                    duration: { hours: 1 }
                 });
-                syncedCount++;
             }
         }
-        
-        if (syncedCount === 0) {
-            return res.status(400).json({ message: "No action items with deadlines were found to sync." });
+
+        if (events.length === 0) {
+            return res.status(400).json({ error: "No action items with deadlines found to sync." });
         }
 
-        res.json({ message: `Successfully synced ${syncedCount} events to Google Calendar.` });
+        ics.createEvents(events, (error, value) => {
+            if (error) {
+                console.error("Error generating ics:", error);
+                return res.status(500).json({ error: "Failed to generate calendar file" });
+            }
+            res.setHeader("Content-Type", "text/calendar");
+            res.setHeader("Content-Disposition", "attachment; filename=Meeting_Tasks.ics");
+            res.send(value);
+        });
+
     } catch (error) {
         console.error("Error syncing to calendar:", error);
-        res.status(500).json({ error: "Failed to sync to calendar. Make sure you authenticated first." });
+        res.status(500).json({ error: "Failed to generate calendar file." });
     }
 });
 

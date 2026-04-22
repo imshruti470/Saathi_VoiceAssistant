@@ -3,6 +3,7 @@ const express = require("express");
 const cors = require("cors");
 const mongoose = require("mongoose");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
+const { google } = require("googleapis");
 const multer = require("multer");
 const PDFDocument = require("pdfkit");
 const fs = require("fs");
@@ -12,6 +13,12 @@ const path = require("path");
 const app = express();
 const port = 5000;
 const MONGO_URI = "mongodb://127.0.0.1:27017/transcriptions";
+
+const oauth2Client = new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET,
+    process.env.GOOGLE_REDIRECT_URI
+);
 
 const upload = multer({ dest: 'uploads/' });
 
@@ -44,9 +51,15 @@ async function analyzeWithGemini(text) {
 Provide the output as a JSON object with the following exact structure:
 {
   "summary": "A concise summary of the meeting",
-  "actionItems": ["Action item 1", "Action item 2"],
+  "actionItems": [
+    {
+       "task": "Action item description",
+       "deadline": "ISO 8601 formatted date if mentioned, otherwise null"
+    }
+  ],
   "keywords": ["keyword1", "keyword2"]
 }
+Current Date/Time context for resolving relative dates (like 'tomorrow' or 'next Tuesday'): ${new Date().toISOString()}
 Do not include markdown formatting like \`\`\`json. Just the raw JSON object.
 
 Transcript:
@@ -207,7 +220,8 @@ app.get("/download-pdf", async (req, res) => {
         if (latestTranscription.analysis && latestTranscription.analysis.actionItems) {
             doc.fontSize(14).text("Action Items:");
             latestTranscription.analysis.actionItems.forEach(item => {
-                doc.fontSize(12).text(`• ${item}`);
+                const taskStr = typeof item === 'object' ? `${item.task} ${item.deadline ? '(Due: ' + new Date(item.deadline).toLocaleDateString() + ')' : ''}` : item;
+                doc.fontSize(12).text(`• ${taskStr}`);
             });
         }
 
@@ -228,7 +242,10 @@ app.post("/send-email", async (req, res) => {
 
         const { summary, analysis, createdAt } = latestTranscription;
         const keywords = analysis?.keywords?.join(", ") || "None";
-        const actionItems = analysis?.actionItems?.map(item => `<li>${item}</li>`).join("") || "<li>None</li>";
+        const actionItems = analysis?.actionItems?.map(item => {
+            const taskStr = typeof item === 'object' ? `${item.task} ${item.deadline ? '(Due: ' + new Date(item.deadline).toLocaleDateString() + ')' : ''}` : item;
+            return `<li>${taskStr}</li>`;
+        }).join("") || "<li>None</li>";
         
         const dateObj = createdAt ? new Date(createdAt) : new Date();
         const formattedDate = dateObj.toLocaleDateString("en-US", { year: 'numeric', month: 'long', day: 'numeric' });
@@ -303,6 +320,69 @@ app.post("/send-email", async (req, res) => {
     }
 });
 
+
+app.get("/auth/google", (req, res) => {
+    const url = oauth2Client.generateAuthUrl({
+        access_type: 'offline',
+        scope: ['https://www.googleapis.com/auth/calendar.events']
+    });
+    res.json({ url });
+});
+
+app.get("/oauth2callback", async (req, res) => {
+    const { code } = req.query;
+    try {
+        const { tokens } = await oauth2Client.getToken(code);
+        oauth2Client.setCredentials(tokens);
+        res.redirect("http://localhost:3000/transcription?auth=success");
+    } catch (error) {
+        console.error("Error getting tokens:", error);
+        res.redirect("http://localhost:3000/transcription?auth=error");
+    }
+});
+
+app.post("/sync-calendar", async (req, res) => {
+    try {
+        const latestTranscription = await Transcription.findOne().sort({ createdAt: -1 });
+        if (!latestTranscription || !latestTranscription.analysis.actionItems) {
+            return res.status(404).json({ error: "No action items to sync" });
+        }
+
+        const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+        let syncedCount = 0;
+
+        for (const item of latestTranscription.analysis.actionItems) {
+            if (typeof item === 'object' && item.task && item.deadline) {
+                const event = {
+                    summary: item.task,
+                    description: "Auto-generated from Smart Voice Assistant.",
+                    start: {
+                        dateTime: item.deadline,
+                        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                    },
+                    end: {
+                        dateTime: new Date(new Date(item.deadline).getTime() + 60*60*1000).toISOString(),
+                        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                    },
+                };
+                await calendar.events.insert({
+                    calendarId: 'primary',
+                    resource: event,
+                });
+                syncedCount++;
+            }
+        }
+        
+        if (syncedCount === 0) {
+            return res.status(400).json({ message: "No action items with deadlines were found to sync." });
+        }
+
+        res.json({ message: `Successfully synced ${syncedCount} events to Google Calendar.` });
+    } catch (error) {
+        console.error("Error syncing to calendar:", error);
+        res.status(500).json({ error: "Failed to sync to calendar. Make sure you authenticated first." });
+    }
+});
 
 app.listen(port, () => {
     console.log(`🚀 Server running on http://localhost:${port}`);

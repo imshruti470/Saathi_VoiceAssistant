@@ -93,7 +93,7 @@ ${text}`;
     } catch (error) {
         console.error("Gemini API Error:", error);
         return {
-            summary: "Error generating summary. Please check your API key.",
+            summary: "Internal Server Error. Try again later.",
             analysis: { wordCount: 0, tokens: [], actionItems: [], keywords: [] }
         };
     }

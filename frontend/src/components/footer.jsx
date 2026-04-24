@@ -3,7 +3,7 @@ import React from 'react';
 const Footer = () => {
   return (
     <footer style={styles.footer}>
-      <p style={styles.footerText}>© 2025 Smart Voice Assistant. All Rights Reserved.</p>
+      <p style={styles.footerText}>© 2026 Smart Voice Assistant. All Rights Reserved. Made with ❤️ by Shruti Mishra</p>
     </footer>
   );
 };

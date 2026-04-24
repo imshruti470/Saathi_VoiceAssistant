@@ -9,10 +9,12 @@ const PDFDocument = require("pdfkit");
 const fs = require("fs");
 const nodemailer = require("nodemailer");
 const path = require("path");
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
 
 const app = express();
-const port = 5000;
-const MONGO_URI = "mongodb://127.0.0.1:27017/transcriptions";
+const port = process.env.PORT || 5000;
+const MONGO_URI = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/transcriptions";
 
 const upload = multer({ dest: 'uploads/' });
 
@@ -23,12 +25,20 @@ mongoose.connect(MONGO_URI)
 
 
 const TranscriptionSchema = new mongoose.Schema({
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     text: String,
     analysis: Object,
     summary: String,
     createdAt: { type: Date, default: Date.now, expires: 7200 }, // Auto-delete after 2 hours (7200 seconds)
 });
 const Transcription = mongoose.model("Transcription", TranscriptionSchema);
+
+const UserSchema = new mongoose.Schema({
+    email: { type: String, required: true, unique: true },
+    password: { type: String, required: true },
+    createdAt: { type: Date, default: Date.now }
+});
+const User = mongoose.model("User", UserSchema);
 
 app.use(cors());
 app.use(express.json());
@@ -90,14 +100,76 @@ ${text}`;
 }
 
 
-app.post("/save-transcript", async (req, res) => {
+// --- Authentication Middleware ---
+const authenticateToken = (req, res, next) => {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+
+    if (!token) return res.status(401).json({ error: "Access denied, no token provided" });
+
+    jwt.verify(token, process.env.JWT_SECRET || "default_secret_key", (err, user) => {
+        if (err) return res.status(403).json({ error: "Invalid token" });
+        req.user = user;
+        next();
+    });
+};
+
+// --- Auth Routes ---
+app.post("/api/auth/register", async (req, res) => {
+    try {
+        const { email, password } = req.body;
+
+        // Check if user exists
+        const existingUser = await User.findOne({ email });
+        if (existingUser) return res.status(400).json({ error: "User already exists" });
+
+        // Hash password
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(password, salt);
+
+        const newUser = new User({ email, password: hashedPassword });
+        await newUser.save();
+
+        // Generate token
+        const token = jwt.sign({ id: newUser._id, email: newUser.email }, process.env.JWT_SECRET || "default_secret_key", { expiresIn: "7d" });
+
+        res.status(201).json({ message: "User registered successfully", token, user: { email: newUser.email } });
+    } catch (error) {
+        console.error("Registration Error:", error);
+        res.status(500).json({ error: "Server error during registration" });
+    }
+});
+
+app.post("/api/auth/login", async (req, res) => {
+    try {
+        const { email, password } = req.body;
+
+        // Find user
+        const user = await User.findOne({ email });
+        if (!user) return res.status(400).json({ error: "Invalid email or password" });
+
+        // Check password
+        const isMatch = await bcrypt.compare(password, user.password);
+        if (!isMatch) return res.status(400).json({ error: "Invalid email or password" });
+
+        // Generate token
+        const token = jwt.sign({ id: user._id, email: user.email }, process.env.JWT_SECRET || "default_secret_key", { expiresIn: "7d" });
+
+        res.json({ message: "Login successful", token, user: { email: user.email } });
+    } catch (error) {
+        console.error("Login Error:", error);
+        res.status(500).json({ error: "Server error during login" });
+    }
+});
+
+app.post("/save-transcript", authenticateToken, async (req, res) => {
     try {
         const { text } = req.body;
         if (!text) return res.status(400).json({ error: "No text provided" });
 
         const { summary, analysis } = await analyzeWithGemini(text);
 
-        const newTranscription = new Transcription({ text, analysis, summary });
+        const newTranscription = new Transcription({ userId: req.user.id, text, analysis, summary });
         await newTranscription.save();
 
         res.json({ message: "Transcription saved!", text, analysis, summary });
@@ -108,9 +180,9 @@ app.post("/save-transcript", async (req, res) => {
 });
 
 
-app.get("/latest-transcript", async (req, res) => {
+app.get("/latest-transcript", authenticateToken, async (req, res) => {
     try {
-        const latestTranscription = await Transcription.findOne().sort({ createdAt: -1 });
+        const latestTranscription = await Transcription.findOne({ userId: req.user.id }).sort({ createdAt: -1 });
         if (!latestTranscription) return res.status(404).json({ error: "No transcription found" });
 
         res.json(latestTranscription);
@@ -121,7 +193,7 @@ app.get("/latest-transcript", async (req, res) => {
 });
 
 
-app.post("/upload-audio", upload.single("audio"), async (req, res) => {
+app.post("/upload-audio", authenticateToken, upload.single("audio"), async (req, res) => {
     try {
         if (!req.file) return res.status(400).json({ error: "No audio file provided" });
 
@@ -175,7 +247,7 @@ Do not include markdown formatting like \`\`\`json. Just the raw JSON object.`;
         };
         const summary = data.summary || "No summary available";
 
-        const newTranscription = new Transcription({ text, analysis, summary });
+        const newTranscription = new Transcription({ userId: req.user.id, text, analysis, summary });
         await newTranscription.save();
 
         // clean up uploaded file
@@ -188,9 +260,9 @@ Do not include markdown formatting like \`\`\`json. Just the raw JSON object.`;
     }
 });
 
-app.get("/download-pdf", async (req, res) => {
+app.get("/download-pdf", authenticateToken, async (req, res) => {
     try {
-        const latestTranscription = await Transcription.findOne().sort({ createdAt: -1 });
+        const latestTranscription = await Transcription.findOne({ userId: req.user.id }).sort({ createdAt: -1 });
         if (!latestTranscription) return res.status(404).json({ error: "No transcription found" });
 
         const doc = new PDFDocument();
@@ -226,12 +298,22 @@ app.get("/download-pdf", async (req, res) => {
     }
 });
 
-app.post("/send-email", async (req, res) => {
+app.post("/send-email", authenticateToken, async (req, res) => {
     const { email } = req.body;
     if (!email) return res.status(400).json({ error: "Email is required" });
 
     try {
-        const latestTranscription = await Transcription.findOne().sort({ createdAt: -1 });
+        // Ensure all target emails are registered users
+        const emails = email.split(',').map(e => e.trim()).filter(e => e);
+        const registeredUsers = await User.find({ email: { $in: emails } });
+        const registeredEmails = registeredUsers.map(u => u.email);
+        const unregisteredEmails = emails.filter(e => !registeredEmails.includes(e));
+
+        if (unregisteredEmails.length > 0) {
+            return res.status(403).json({ error: `Cannot send summary. The following are not registered members: ${unregisteredEmails.join(', ')}` });
+        }
+
+        const latestTranscription = await Transcription.findOne({ userId: req.user.id }).sort({ createdAt: -1 });
         if (!latestTranscription) return res.status(404).json({ error: "No transcription found" });
 
         const { summary, analysis, createdAt } = latestTranscription;
@@ -240,7 +322,7 @@ app.post("/send-email", async (req, res) => {
             const taskStr = typeof item === 'object' ? `${item.task} ${item.deadline ? '(Due: ' + new Date(item.deadline).toLocaleDateString() + ')' : ''}` : item;
             return `<li>${taskStr}</li>`;
         }).join("") || "<li>None</li>";
-        
+
         const dateObj = createdAt ? new Date(createdAt) : new Date();
         const formattedDate = dateObj.toLocaleDateString("en-US", { year: 'numeric', month: 'long', day: 'numeric' });
 
@@ -315,9 +397,9 @@ app.post("/send-email", async (req, res) => {
 });
 
 
-app.get("/download-calendar", async (req, res) => {
+app.get("/download-calendar", authenticateToken, async (req, res) => {
     try {
-        const latestTranscription = await Transcription.findOne().sort({ createdAt: -1 });
+        const latestTranscription = await Transcription.findOne({ userId: req.user.id }).sort({ createdAt: -1 });
         if (!latestTranscription || !latestTranscription.analysis.actionItems) {
             return res.status(404).json({ error: "No action items to sync" });
         }
@@ -327,7 +409,7 @@ app.get("/download-calendar", async (req, res) => {
             if (typeof item === 'object' && item.task && item.deadline) {
                 const date = new Date(item.deadline);
                 if (isNaN(date.getTime())) continue; // Skip invalid dates
-                
+
                 events.push({
                     title: item.task,
                     description: "Auto-generated from Smart Voice Assistant.",

@@ -1,0 +1,132 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+:root {
+  --bg-primary: #0b0f19;
+  --bg-secondary: #1a1a2e;
+  
+  --text-primary: #ffffff;
+  --text-secondary: #a0aab2;
+  
+  --accent-blue: #00f2fe;
+  --accent-purple: #4facfe;
+  
+  --glass-bg: rgba(255, 255, 255, 0.05);
+  --glass-border: rgba(255, 255, 255, 0.1);
+  --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+  
+  --glow-blue: 0 0 20px rgba(0, 242, 254, 0.5);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Inter', sans-serif;
+  background: var(--bg-primary);
+  background: radial-gradient(circle at top left, var(--bg-secondary), var(--bg-primary));
+  color: var(--text-primary);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* Glassmorphism Utilities */
+.glass-card {
+  background: var(--glass-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
+  box-shadow: var(--glass-shadow);
+}
+
+/* Premium Button Base */
+.premium-btn {
+  font-family: 'Inter', sans-serif;
+  font-weight: 600;
+  padding: 12px 24px;
+  border-radius: 8px;
+  border: none;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.premium-btn:hover:not(:disabled) {
+  transform: translateY(-2px);
+}
+
+.premium-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Premium Inputs */
+.premium-input {
+  width: 100%;
+  padding: 12px 16px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-family: 'Inter', sans-serif;
+  transition: all 0.3s ease;
+  outline: none;
+  margin-bottom: 16px;
+}
+
+.premium-input:focus {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 10px rgba(0, 242, 254, 0.2);
+}
+
+.premium-input::placeholder {
+  color: var(--text-secondary);
+}
+
+.premium-btn-primary {
+  background: linear-gradient(135deg, var(--accent-purple), var(--accent-blue));
+  color: #0b0f19;
+}
+
+.premium-btn-danger {
+  background: transparent;
+  color: var(--accent-purple);
+  border: 2px solid var(--accent-purple);
+}
+
+.premium-btn-danger:hover:not(:disabled) {
+  background: rgba(79, 172, 254, 0.1);
+}
+
+.premium-btn-success {
+  background: var(--accent-blue);
+  color: #0b0f19;
+}
+
+.premium-btn-outline {
+  background: transparent;
+  color: var(--accent-blue);
+  border: 2px solid var(--accent-blue);
+}
+
+.premium-btn-outline:hover:not(:disabled) {
+  background: rgba(0, 242, 254, 0.1);
+}
+
+/* Glow Animation for Recording */
+@keyframes pulseGlow {
+  0% { box-shadow: 0 0 10px rgba(79, 172, 254, 0.5); }
+  50% { box-shadow: 0 0 25px rgba(79, 172, 254, 0.9); }
+  100% { box-shadow: 0 0 10px rgba(79, 172, 254, 0.5); }
+}
+
+.recording-active {
+  border: 1px solid var(--accent-purple) !important;
+  animation: pulseGlow 2s infinite;
+}
